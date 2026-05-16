@@ -103,7 +103,7 @@
       <div class="panel-head">
         <div>
           <h2>Manager summary</h2>
-          <p>A plain-English decision summary generated from the selected period, product filter, and hotspot data.</p>
+          <p>A plain-English decision summary for the selected period, with store risk signals kept stable and easy to compare.</p>
         </div>
         <span class="pill" id="summaryPeriod">-</span>
       </div>
@@ -111,7 +111,7 @@
         <div class="summary-main" id="managerSummaryText">Upload a dataset to generate a manager-ready summary.</div>
         <div class="summary-card"><span>Main product to review</span><strong id="summaryTopProduct">-</strong><small id="summaryTopProductNote">-</small></div>
         <div class="summary-card"><span>Highest reliable waste rate</span><strong id="summaryHighRate">-</strong><small id="summaryHighRateNote">-</small></div>
-        <div class="summary-card"><span>Store focus</span><strong id="summaryStoreFocus">-</strong><small id="summaryStoreFocusNote">-</small></div>
+        <div class="summary-card"><span>Store risk signals</span><strong id="summaryStoreFocus">-</strong><small id="summaryStoreFocusNote">-</small></div>
       </div>
     </section>
 
@@ -699,12 +699,32 @@ function getStoreHotspotRows() {
 function renderManagerSummary() {
   const rows = filteredProductRows();
   $("summaryPeriod").textContent = filterStatusText(rows.length);
+
+  // Store risk signals are intentionally based on the full selected period, not the
+  // product search/filter or the store ranking dropdown. This keeps the manager
+  // summary stable and easier to understand.
+  const periodStoreRows = rowsFor("stores")
+    .filter(r => (num(r.total_waste) + num(r.total_sold)) > 0);
+  const reliableStoreRateRows = periodStoreRows
+    .filter(r => num(r.total_sold) > 0 && (num(r.total_waste) + num(r.total_sold)) >= 5);
+  const topWasteRateStore = reliableStoreRateRows.length
+    ? [...reliableStoreRateRows].sort((a,b)=>num(b.waste_pct)-num(a.waste_pct) || num(b.total_waste)-num(a.total_waste))[0]
+    : null;
+  const topWasteUnitStore = periodStoreRows.length
+    ? [...periodStoreRows].sort((a,b)=>num(b.total_waste)-num(a.total_waste) || num(b.waste_pct)-num(a.waste_pct))[0]
+    : null;
+
   if (!rows.length) {
-    $("managerSummaryText").textContent = "No products match the current filter, so the dashboard cannot generate a manager summary.";
-    ["summaryTopProduct","summaryHighRate","summaryStoreFocus"].forEach(id => $(id).textContent = "-");
-    ["summaryTopProductNote","summaryHighRateNote","summaryStoreFocusNote"].forEach(id => $(id).textContent = "Try clearing the filter.");
+    $("managerSummaryText").innerHTML = topWasteRateStore || topWasteUnitStore
+      ? `No products match the current filter. For the overall selected period, <strong>${esc(topWasteRateStore ? topWasteRateStore.store : "N/A")}</strong> has the highest reliable store waste rate${topWasteRateStore ? ` at <strong>${pct(topWasteRateStore.waste_pct)}</strong>` : ""}, while <strong>${esc(topWasteUnitStore ? topWasteUnitStore.store : "N/A")}</strong> has the most waste units${topWasteUnitStore ? ` at <strong>${fmt(topWasteUnitStore.total_waste)}</strong>` : ""}.`
+      : "No products match the current filter, and store-level data is not available.";
+    ["summaryTopProduct","summaryHighRate"].forEach(id => $(id).textContent = "-");
+    ["summaryTopProductNote","summaryHighRateNote"].forEach(id => $(id).textContent = "Try clearing the filter.");
+    $("summaryStoreFocus").textContent = topWasteRateStore && topWasteUnitStore ? `${topWasteRateStore.store} / ${topWasteUnitStore.store}` : "No store data";
+    $("summaryStoreFocusNote").textContent = topWasteRateStore && topWasteUnitStore ? `Highest rate: ${topWasteRateStore.store} (${pct(topWasteRateStore.waste_pct)}). Most units: ${topWasteUnitStore.store} (${fmt(topWasteUnitStore.total_waste)} units).` : "Upload store-level data to show location risk.";
     return;
   }
+
   const totalWaste = rows.reduce((s,r)=>s+r.total_waste,0);
   const totalSold = rows.reduce((s,r)=>s+r.total_sold,0);
   const overallRate = calcWasteRate(totalWaste,totalSold);
@@ -712,17 +732,17 @@ function renderManagerSummary() {
   const topSaved = [...rows].sort((a,b)=>b.estimated_saved-a.estimated_saved)[0];
   const reliableRates = rows.filter(r => r.total_sold > 0 && (r.total_waste + r.total_sold) >= 5);
   const highRate = reliableRates.length ? [...reliableRates].sort((a,b)=>b.waste_pct-a.waste_pct)[0] : null;
-  const storeRows = getStoreHotspotRows();
-  const allStoreRows = getStoreHotspotBaseRows();
-  const storeWaste = allStoreRows.reduce((s,r)=>s+r.total_waste,0);
-  const topStore = storeRows[0] || null;
-  const top3StoreWaste = storeRows.slice(0,3).reduce((s,r)=>s+r.total_waste,0);
-  const concentration = storeWaste ? top3StoreWaste / storeWaste : 0;
-  const rankLabel = storeRankLabel();
+
   const scopeText = currentSearchQuery() ? `for products matching “${currentSearchQuery()}”` : "across the selected view";
-  const action = topSaved && topSaved.estimated_saved > 0 ? `The highest-value prep action is ${topSaved.item}, with about ${fmt(topSaved.estimated_saved)} potentially saved units using conservative reduction rules.` : "No aggressive prep cut is recommended from the current filtered view.";
-  const storeSentence = topStore ? `Store hotspots are currently ranked by ${rankLabel}. The leading store is ${topStore.store}; the top 3 ranked stores represent ${pct(concentration)} of total store waste in this view.` : "Store-level data is not available for this view.";
-  $("managerSummaryText").innerHTML = `For <strong>${monthLabel()}</strong>, the filtered view shows <strong>${fmt(totalWaste)}</strong> waste units and <strong>${fmt(totalSold)}</strong> sold units, with a waste rate of <strong>${pct(overallRate)}</strong>. The main waste driver ${scopeText} is <strong>${esc(topWaste.item)}</strong>. ${esc(action)} ${esc(storeSentence)}`;
+  const action = topSaved && topSaved.estimated_saved > 0
+    ? `The highest-value prep action is ${topSaved.item}, with about ${fmt(topSaved.estimated_saved)} potentially saved units using conservative reduction rules.`
+    : "No aggressive prep cut is recommended from the current filtered view.";
+
+  const storeSentence = topWasteRateStore && topWasteUnitStore
+    ? `For store risk, the overall selected period shows ${topWasteRateStore.store} with the highest reliable waste rate at ${pct(topWasteRateStore.waste_pct)}, while ${topWasteUnitStore.store} has the most total waste units at ${fmt(topWasteUnitStore.total_waste)}. These store signals are not changed by the product filter or store-ranking dropdown.`
+    : "Store-level data is not available for this period.";
+
+  $("managerSummaryText").innerHTML = `For <strong>${monthLabel()}</strong>, the filtered product view shows <strong>${fmt(totalWaste)}</strong> waste units and <strong>${fmt(totalSold)}</strong> sold units, with a waste rate of <strong>${pct(overallRate)}</strong>. The main waste driver ${scopeText} is <strong>${esc(topWaste.item)}</strong>. ${esc(action)} ${esc(storeSentence)}`;
   $("summaryTopProduct").textContent = topWaste.item;
   $("summaryTopProductNote").textContent = `${fmt(topWaste.total_waste)} waste units, ${pct(topWaste.waste_pct)} waste rate.`;
   if (highRate) {
@@ -732,8 +752,12 @@ function renderManagerSummary() {
     $("summaryHighRate").textContent = "Not enough activity";
     $("summaryHighRateNote").textContent = "Products with 0 sold are not treated as 100% waste.";
   }
-  $("summaryStoreFocus").textContent = topStore ? topStore.store : "No store data";
-  $("summaryStoreFocusNote").textContent = topStore ? `Ranked by ${storeRankLabel()}: ${topStore.store}. Top 3 visible stores represent ${pct(concentration)} of total store waste in this view.` : "Upload store-level data to show location insights.";
+  $("summaryStoreFocus").textContent = topWasteRateStore && topWasteUnitStore
+    ? `${topWasteRateStore.store} / ${topWasteUnitStore.store}`
+    : "No store data";
+  $("summaryStoreFocusNote").textContent = topWasteRateStore && topWasteUnitStore
+    ? `Highest rate: ${topWasteRateStore.store} (${pct(topWasteRateStore.waste_pct)}). Most units: ${topWasteUnitStore.store} (${fmt(topWasteUnitStore.total_waste)} units).`
+    : "Upload store-level data to show location risk.";
 }
 
 function renderStoreHotspots() {
