@@ -1,0 +1,1 @@
+Open OPEN_THIS_FILE.html in Chrome or Edge. Upload an Excel workbook, then click Use Uploaded Dataset or choose/drop the file. The dashboard will generate insights from the uploaded data only.
